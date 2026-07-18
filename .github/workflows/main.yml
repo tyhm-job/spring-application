@@ -1,4 +1,4 @@
-name: Java CI with Gradle
+name: Java CI with Maven
 
 on: [push]
 
@@ -6,11 +6,13 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
-    - name: Set up JDK 17 # Hoặc phiên bản JDK bạn dùng
-      uses: actions/setup-java@v3
-      with:
-        java-version: '17'
-        distribution: 'temurin'
-    - name: Build with Gradle
-      run: ./gradlew build
+      - uses: actions/checkout@v3
+      - name: Set up JDK 17
+        uses: actions/setup-java@v3
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: maven # Dòng này giúp build nhanh hơn ở các lần sau
+      
+      - name: Build with Maven
+        run: mvn clean package -DskipTests
