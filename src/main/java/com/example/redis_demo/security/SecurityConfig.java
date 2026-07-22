@@ -26,10 +26,9 @@ public class SecurityConfig {
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
                 // 2. Cấu hình cho phép truy cập
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers(HttpMethod.GET, "/api/todos").permitAll()
-                        // CHO PHÉP CÔNG KHAI API ĐĂNG NHẬP (để lấy token)
-                        .requestMatchers("/api/auth/**").permitAll()
-                        .requestMatchers(HttpMethod.POST, "/api/todos").hasAuthority("ROLE_ADMIN")
+                        .requestMatchers(HttpMethod.GET).permitAll()
+                        .requestMatchers(HttpMethod.POST).permitAll()
+//                        .requestMatchers(HttpMethod.POST, "/api/todos").permitAll()
                         .anyRequest().authenticated()
                 );
 

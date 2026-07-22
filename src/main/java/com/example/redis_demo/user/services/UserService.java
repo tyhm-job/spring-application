@@ -1,71 +1,116 @@
 package com.example.redis_demo.user.services;
 
-import com.example.redis_demo.exception.EmailAlreadyExistsException;
-import com.example.redis_demo.user.dto.RegisterRequest;
+import com.example.redis_demo.common.exception.AppException;
+import com.example.redis_demo.common.enums.ResponseCode;
+import com.example.redis_demo.security.JwtProvider;
+import com.example.redis_demo.user.dto.request.LoginRequest;
+import com.example.redis_demo.user.dto.request.RegisterRequest;
+import com.example.redis_demo.user.dto.request.VerifyRequest;
 import com.example.redis_demo.user.mapper.UserMapper;
 import com.example.redis_demo.user.model.User;
 import com.example.redis_demo.user.repositories.UserRepository;
+import jakarta.transaction.Transactional;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import tools.jackson.databind.ObjectMapper;
 
 import java.time.Duration;
+import java.util.Random;
 
 @Service
 public class UserService {
     @Autowired
     private UserRepository userRepository;
     @Autowired
-    private RedisTemplate<String, Object> redisTemplate;
+    private RedisTemplate<String, String> redisTemplate;
     @Autowired
     private ObjectMapper objectMapper;
     @Autowired
     private UserMapper userMapper;
+    @Autowired
+    private JwtProvider jwtProvider;
 
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
+    @Transactional
     public void register(RegisterRequest request) {
         if (userRepository.existsByEmail(request.getEmail())) {
-            throw new EmailAlreadyExistsException("Email" + request.getEmail() + "đã tồn tại!");
+            throw new AppException(ResponseCode.EMAIL_ALREADY_EXISTS);
         }
 
-        // Tạo Entity và lưu vào DB
+        // Create Entity and save to DB
         User user = userMapper.toEntity(request);
 
-        // Băm password từ password thô trước
+        // Generate PasswordHash from original Password by BCryptPasswordEncoder
         user.setPasswordHash(passwordEncoder.encode(request.getPassword()));
-        user.setStatus("ACTIVE");
+        user.setStatus("PENDING");
 
         userRepository.save(user);
+
+        // Generate OTP
+        String otp = String.valueOf(new Random().nextInt(100000, 999999));
+
+        try {
+            // 3. Save to Redis (TTL = 10 mins)
+            redisTemplate.opsForValue().set("otp:" + request.getEmail(), otp, Duration.ofMinutes(10));
+        } catch (Exception e) {
+            throw new AppException(ResponseCode.INTERNAL_SERVER_ERROR);
+        }
     }
 
-    public User getCustomerById(String id) {
-        String key = "customer:" + id;
-        User user = null;
-        // 1. Tìm trong Redis
-        Object obj = redisTemplate.opsForValue().get(key);
-        if (obj != null) {
-            // Kiểm tra xem có phải là "giá trị đánh dấu" không
-            if ("NULL".equals(obj)) {
-                return null; // Trả về null ngay lập tức, không xuống DB nữa
-            }
+    @Transactional
+    public void verify(VerifyRequest request) {
+        String cachedOtpKey = "otp:" + request.getEmail();
+        String cachedOtp = redisTemplate.opsForValue().get(cachedOtpKey);
 
-            return objectMapper.convertValue(obj, User.class);
+        if (cachedOtp == null || !cachedOtp.equals(request.getOtp())) {
+            throw new AppException(ResponseCode.INVALID_OTP);
         }
 
-        // 2. Nếu không có trong Redis, tìm trong MySQL
-        user = userRepository.findById(id).orElse(null);
+        if (cachedOtp != null && cachedOtp.equals(request.getOtp())) {
+            // Xác thực thành công: update status trong MySQL
+            User user = userRepository.findByEmail(request.getEmail()).orElseThrow(() -> new AppException(ResponseCode.USER_NOT_FOUND));
+            user.setStatus("ACTIVE");
+            userRepository.save(user);
 
-        // 3. Xử lý logic chống Cache Penetration
-        if (user == null) {
-            // Nếu không có trong DB, lưu "NULL" vào Redis trong 5 phút
-            redisTemplate.opsForValue().set(key, "NULL", Duration.ofMinutes(5));
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    // Xóa OTP trong Redis sau khi transaction đã commit
+                    redisTemplate.delete(cachedOtpKey);
+                }
+            });
         } else {
-            // Nếu có trong DB, lưu object vào Redis
-            redisTemplate.opsForValue().set(key, user, Duration.ofHours(1));
+            throw new AppException(ResponseCode.OTP_EXPIRED);
         }
-        return user;
+    }
+
+    @Transactional
+    public String login(LoginRequest request) {
+        String cachedNumOfLogKey = "numOfLog:" + request.getEmail();
+        String cachedNumOfLogValue = redisTemplate.opsForValue().get(cachedNumOfLogKey);
+        int cachedNumOfLog = cachedNumOfLogValue != null ?
+                Integer.parseInt(cachedNumOfLogValue) : 0;
+
+        if (cachedNumOfLog >= 5) {
+            throw new AppException(ResponseCode.MAXIMUM_NUMBER_OF_ATTEMPTS);
+        }
+
+        User user = userRepository.findByEmail(request.getEmail()).orElseThrow(() -> new AppException(ResponseCode.USER_NOT_FOUND));
+
+        if (passwordEncoder.matches(request.getPassword(), user.getPasswordHash())) {
+            redisTemplate.delete(cachedNumOfLogKey);
+
+            return jwtProvider.generateToken(user);
+        } else {
+            redisTemplate.opsForValue().set(cachedNumOfLogKey, String.valueOf(++cachedNumOfLog),
+                    Duration.ofMinutes(15));
+
+            throw new AppException(ResponseCode.INVALID_CREDENTIALS);
+        }
     }
 }

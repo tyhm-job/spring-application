@@ -2,11 +2,14 @@ package com.example.redis_demo.user.model;
 
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.UuidGenerator;
+import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
 import java.time.LocalDateTime;
 import java.util.UUID;
 
 @Entity
+@EntityListeners(AuditingEntityListener.class)
 @Table(name = "users")
 @Getter
 @Setter
@@ -15,9 +18,10 @@ import java.util.UUID;
 @Builder
 public class User {
     @Id
-    @GeneratedValue(strategy = GenerationType.UUID)
-    @Column(name = "id", columnDefinition = "VARCHAR(36)") // MySQL thường lưu UUID dưới dạng chuỗi 36 ký tự
+    @UuidGenerator
+    @Column(name = "id")
     private UUID id;
+
 
     @Column(name = "email", nullable = false, length = 320)
     private String email;

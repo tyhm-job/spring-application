@@ -1,6 +1,6 @@
 package com.example.redis_demo.user.mapper;
 
-import com.example.redis_demo.user.dto.RegisterRequest;
+import com.example.redis_demo.user.dto.request.RegisterRequest;
 import com.example.redis_demo.user.model.User;
 import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
