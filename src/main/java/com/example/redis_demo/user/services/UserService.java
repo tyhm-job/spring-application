@@ -14,8 +14,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 import tools.jackson.databind.ObjectMapper;
 
 import java.time.Duration;
@@ -23,18 +21,27 @@ import java.util.Random;
 
 @Service
 public class UserService {
-    @Autowired
-    private UserRepository userRepository;
-    @Autowired
-    private RedisTemplate<String, String> redisTemplate;
-    @Autowired
-    private ObjectMapper objectMapper;
-    @Autowired
-    private UserMapper userMapper;
-    @Autowired
-    private JwtProvider jwtProvider;
+    private final UserRepository userRepository;
+    private final RedisTemplate<String, String> redisTemplate;
+    private final ObjectMapper objectMapper;
+    private final UserMapper userMapper;
+    private final JwtProvider jwtProvider;
+    private final BCryptPasswordEncoder passwordEncoder; // Dùng PasswordEncoder (interface) thay vì BCryptPasswordEncoder cụ thể
 
-    private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
+    // Constructor Injection (Từ Spring 4.3+, nếu class chỉ có duy nhất 1 constructor thì bạn có thể bỏ qua @Autowired ở đây)
+    public UserService(UserRepository userRepository,
+                       RedisTemplate<String, String> redisTemplate,
+                       ObjectMapper objectMapper,
+                       UserMapper userMapper,
+                       JwtProvider jwtProvider,
+                       BCryptPasswordEncoder passwordEncoder) {
+        this.userRepository = userRepository;
+        this.redisTemplate = redisTemplate;
+        this.objectMapper = objectMapper;
+        this.userMapper = userMapper;
+        this.jwtProvider = jwtProvider;
+        this.passwordEncoder = passwordEncoder;
+    }
 
     @Transactional
     public void register(RegisterRequest request) {
@@ -68,25 +75,16 @@ public class UserService {
         String cachedOtp = redisTemplate.opsForValue().get(cachedOtpKey);
 
         if (cachedOtp == null || !cachedOtp.equals(request.getOtp())) {
-            throw new AppException(ResponseCode.INVALID_OTP);
+            throw new AppException(ResponseCode.OTP_INVALID_OR_EXPIRED);
         }
 
-        if (cachedOtp != null && cachedOtp.equals(request.getOtp())) {
-            // Xác thực thành công: update status trong MySQL
-            User user = userRepository.findByEmail(request.getEmail()).orElseThrow(() -> new AppException(ResponseCode.USER_NOT_FOUND));
-            user.setStatus("ACTIVE");
-            userRepository.save(user);
+        // Xác thực thành công: update status trong MySQL
+        User user = userRepository.findByEmail(request.getEmail()).orElseThrow(() -> new AppException(ResponseCode.EMAIL_DOES_NOT_EXIST));
+        user.setStatus("ACTIVE");
+        userRepository.save(user);
 
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override
-                public void afterCommit() {
-                    // Xóa OTP trong Redis sau khi transaction đã commit
-                    redisTemplate.delete(cachedOtpKey);
-                }
-            });
-        } else {
-            throw new AppException(ResponseCode.OTP_EXPIRED);
-        }
+        // Xóa OTP trong Redis sau khi transaction đã commit
+        redisTemplate.delete(cachedOtpKey);
     }
 
     @Transactional
@@ -100,7 +98,7 @@ public class UserService {
             throw new AppException(ResponseCode.MAXIMUM_NUMBER_OF_ATTEMPTS);
         }
 
-        User user = userRepository.findByEmail(request.getEmail()).orElseThrow(() -> new AppException(ResponseCode.USER_NOT_FOUND));
+        User user = userRepository.findByEmail(request.getEmail()).orElseThrow(() -> new AppException(ResponseCode.EMAIL_DOES_NOT_EXIST));
 
         if (passwordEncoder.matches(request.getPassword(), user.getPasswordHash())) {
             redisTemplate.delete(cachedNumOfLogKey);
